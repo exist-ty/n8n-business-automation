@@ -55,6 +55,7 @@ workflows/                       # экспортированные n8n workflow
   06_self_service_analytics_bot.json
 docs/
   self-service-bot-security.md       # модель угроз, что реально гарантировано
+  security_model.md                  # тот же бот через STRIDE — что покрыто, что нет
   manager-guide-self-service-bot.md  # инструкция для менеджеров простым языком
 ```
 
@@ -152,7 +153,9 @@ SQL появился раньше `MATERIALIZED VIEW`, и Postgres не стал
 
 ### 6: Self-Service Analytics Bot — самое интересное
 
-Три независимых слоя защиты (см. `docs/self-service-bot-security.md`)
+Три независимых слоя защиты (см. `docs/self-service-bot-security.md`, а
+также `docs/security_model.md` — тот же бот, разложенный по STRIDE, где
+честно отмечен один непокрытый пробел — Spoofing/отсутствие allowlist чатов)
 проверены эмпирически на реальной БД под ролью `n8n_selfservice`:
 
 | Проверка | Результат |
