@@ -1,0 +1,49 @@
+# n8n живёт в собственном docker-compose, как и остальные репозитории
+# экосистемы (см. product-marketing-analytics/docker-compose.yml для
+# ClickHouse, Nikolay-Kolesnikov-portfolio-hub/docker-compose.yml для
+# Airflow) — каждый сервис поднимается независимо, кросс-репозиторное
+# обращение идёт через host.docker.internal, а не через один общий compose.
+#
+# n8n хранит воркфлоу/креды в SQLite (том n8n-data) — отдельный Postgres
+# для самого n8n не нужен: воркфлоу здесь не пишут в БД n8n конкурентно,
+# это не веб-приложение с нагрузкой, а несколько cron/webhook-триггеров.
+
+services:
+  n8n:
+    # :latest на момент первого запуска резолвился в 2.30.7 (проверено:
+    # docker exec ... n8n --version) — пинуем то, что реально протестировано,
+    # а не абстрактный latest
+    image: docker.n8n.io/n8nio/n8n:2.30.7
+    environment:
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
+      GENERIC_TIMEZONE: Europe/Moscow
+      N8N_PORT: "5678"
+      # По умолчанию n8n блокирует $env в нодах/выражениях — защита
+      # от воркфлоу недоверенного автора, читающего секреты хоста.
+      # Здесь единственный автор воркфлоу — я сам, инстанс не мультитенантный,
+      # поэтому риск неприменим; без этого флага Telegram/Email-ноды не могут
+      # прочитать TELEGRAM_ALERT_CHAT_ID/ALERT_EMAIL_* (проверено эмпирически:
+      # без него падает с "access to env vars denied").
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+      TELEGRAM_ALERT_CHAT_ID: ${TELEGRAM_ALERT_CHAT_ID:-}
+      ALERT_EMAIL_FROM: ${ALERT_EMAIL_FROM:-}
+      ALERT_EMAIL_TO: ${ALERT_EMAIL_TO:-}
+      OLLAMA_CHAT_MODEL: qwen2.5:3b-instruct
+      NOTION_API_TOKEN: ${NOTION_API_TOKEN:-}
+      NOTION_DOCS_PAGE_ID: ${NOTION_DOCS_PAGE_ID:-}
+      # Не персистентный: заполняется только на время живого теста Telegram
+      # Trigger через временный туннель (ngrok/cloudflared) — Telegram
+      # Trigger регистрирует вебхук у Telegram по этому base URL, локальный
+      # localhost для этого не годится. В .env НЕ хранится осознанно —
+      # ngrok-URL на бесплатном плане меняется при каждом перезапуске.
+      WEBHOOK_URL: ${WEBHOOK_URL:-}
+    ports:
+      - "5678:5678"
+    volumes:
+      - n8n-data:/home/node/.n8n
+      - ./workflows:/workflows:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  n8n-data:

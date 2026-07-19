@@ -1,0 +1,181 @@
+{
+  "id": "f21b7c9e3a4d4f0a",
+  "name": "Weekly AI Business Digest",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "weeks", "weeksInterval": 1, "triggerAtDay": [1], "triggerAtHour": 8 }]
+        }
+      },
+      "id": "cron-trigger",
+      "name": "Weekly schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-800, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "CREATE TABLE IF NOT EXISTS business_metric_snapshots (id SERIAL PRIMARY KEY, captured_at TIMESTAMP NOT NULL DEFAULT now(), metric_name TEXT NOT NULL, metric_key TEXT NOT NULL, metric_value NUMERIC(12, 4) NOT NULL); INSERT INTO business_metric_snapshots (metric_name, metric_key, metric_value) SELECT 'romi', channel, romi FROM mart_channel_economics_mv WHERE spend_month = (SELECT MAX(spend_month) FROM mart_channel_economics_mv) UNION ALL SELECT 'avg_ltv', 'overall', ROUND(AVG(final_revenue), 2) FROM (SELECT customer_id, MAX(cumulative_revenue) AS final_revenue FROM mart_customer_ltv_mv GROUP BY customer_id) final_ltv_per_customer UNION ALL SELECT 'retention_m1', 'overall', retention_rate FROM mart_cohort_retention_mv WHERE month_number = 1 AND cohort_month = (SELECT MAX(cohort_month) FROM mart_cohort_retention_mv WHERE month_number = 1);",
+        "options": {}
+      },
+      "id": "insert-snapshot",
+      "name": "Insert snapshot",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-580, 0],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-etl-readonly",
+          "name": "Postgres (etl_portfolio, n8n_readonly)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH ranked_runs AS (SELECT captured_at, ROW_NUMBER() OVER (ORDER BY captured_at DESC) AS rn FROM (SELECT DISTINCT captured_at FROM business_metric_snapshots) d), current_run AS (SELECT s.metric_name, s.metric_key, s.metric_value FROM business_metric_snapshots s JOIN ranked_runs r ON r.captured_at = s.captured_at AND r.rn = 1), previous_run AS (SELECT s.metric_name, s.metric_key, s.metric_value FROM business_metric_snapshots s JOIN ranked_runs r ON r.captured_at = s.captured_at AND r.rn = 2) SELECT COALESCE(c.metric_name, p.metric_name) AS metric_name, COALESCE(c.metric_key, p.metric_key) AS metric_key, COALESCE(p.metric_value, 0) AS previous_value, COALESCE(c.metric_value, 0) AS current_value, ROUND(COALESCE(c.metric_value, 0) - COALESCE(p.metric_value, 0), 4) AS delta, (SELECT COUNT(DISTINCT captured_at) FROM business_metric_snapshots) AS snapshot_count FROM current_run c FULL OUTER JOIN previous_run p ON p.metric_name = c.metric_name AND p.metric_key = c.metric_key ORDER BY ABS(COALESCE(c.metric_value, 0) - COALESCE(p.metric_value, 0)) DESC;",
+        "options": {}
+      },
+      "id": "diff-snapshots",
+      "name": "Diff snapshots",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-360, 0],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-etl-readonly",
+          "name": "Postgres (etl_portfolio, n8n_readonly)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all().map(i => i.json);\nconst hasBaseline = rows.length > 0 && Number(rows[0].snapshot_count) >= 2;\n\nconst fmt = (r) => {\n  if (r.metric_name === 'romi') return `ROMI (${r.metric_key}): ${Math.round(r.current_value * 100)}%${hasBaseline ? ` (${r.delta >= 0 ? '+' : ''}${Math.round(r.delta * 100)} \\u043f.\\u043f.)` : ''}`;\n  if (r.metric_name === 'avg_ltv') return `LTV (\\u0441\\u0440\\u0435\\u0434\\u043d\\u0438\\u0439): ${r.current_value}${hasBaseline ? ` (${r.delta >= 0 ? '+' : ''}${r.delta})` : ''}`;\n  if (r.metric_name === 'retention_m1') return `Retention M1: ${Math.round(r.current_value * 100)}%${hasBaseline ? ` (${r.delta >= 0 ? '+' : ''}${Math.round(r.delta * 100)} \\u043f.\\u043f.)` : ''}`;\n  return `${r.metric_name}/${r.metric_key}: ${r.current_value}`;\n};\nconst raw_lines = rows.map(fmt);\n\nconst biggestMove = hasBaseline\n  ? rows.reduce((a, b) => Math.abs(b.delta) > Math.abs(a.delta) ? b : a)\n  : null;\n\nconst prompt = hasBaseline\n  ? `\\u0422\\u044b \\u2014 \\u0430\\u043d\\u0430\\u043b\\u0438\\u0442\\u0438\\u043a. \\u0412\\u043e\\u0442 \\u0438\\u0437\\u043c\\u0435\\u043d\\u0435\\u043d\\u0438\\u044f \\u0431\\u0438\\u0437\\u043d\\u0435\\u0441-\\u043c\\u0435\\u0442\\u0440\\u0438\\u043a \\u0437\\u0430 \\u043f\\u0435\\u0440\\u0438\\u043e\\u0434:\\n${raw_lines.join('\\n')}\\n\\n\\u041d\\u0430\\u043f\\u0438\\u0448\\u0438 2-3 \\u043f\\u0440\\u0435\\u0434\\u043b\\u043e\\u0436\\u0435\\u043d\\u0438\\u044f \\u043d\\u0430 \\u0440\\u0443\\u0441\\u0441\\u043a\\u043e\\u043c: \\u043a\\u0430\\u043a\\u043e\\u0435 \\u0438\\u0437\\u043c\\u0435\\u043d\\u0435\\u043d\\u0438\\u0435 \\u0441\\u0430\\u043c\\u043e\\u0435 \\u0437\\u0430\\u043c\\u0435\\u0442\\u043d\\u043e\\u0435 \\u0438 \\u0447\\u0442\\u043e \\u0441\\u0442\\u043e\\u0438\\u0442 \\u043f\\u0440\\u043e\\u0432\\u0435\\u0440\\u0438\\u0442\\u044c. \\u0411\\u0435\\u0437 \\u0432\\u0441\\u0442\\u0443\\u043f\\u043b\\u0435\\u043d\\u0438\\u0439, \\u0441\\u0440\\u0430\\u0437\\u0443 \\u043f\\u043e \\u0434\\u0435\\u043b\\u0443.`\n  : null;\n\nreturn [{ json: { has_baseline: hasBaseline, raw_lines, prompt } }];"
+      },
+      "id": "build-prompt",
+      "name": "Build digest data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-140, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.has_baseline }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-has-baseline",
+      "name": "If has baseline",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [80, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:11434/api/generate",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $env.OLLAMA_CHAT_MODEL || 'qwen2.5:3b-instruct', prompt: $json.prompt, stream: false }) }}",
+        "options": { "timeout": 60000 }
+      },
+      "id": "ollama-summary",
+      "name": "Ollama AI summary",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [300, -80]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw_lines = $('Build digest data').item.json.raw_lines;\nconst hasBaseline = $('Build digest data').item.json.has_baseline;\nlet aiSummary = '';\nif (hasBaseline) {\n  const resp = $input.first().json;\n  aiSummary = (resp.response || '').trim();\n}\nconst header = '\\ud83d\\udcc8 Weekly Report';\nconst body = raw_lines.join('\\n');\nconst summarySection = aiSummary ? `\\n\\n\\u26a0\\ufe0f ${aiSummary}` : (hasBaseline ? '' : '\\n\\n(\\u043f\\u0435\\u0440\\u0432\\u044b\\u0439 \\u0437\\u0430\\u043f\\u0443\\u0441\\u043a \\u2014 \\u0431\\u0430\\u0437\\u044b \\u0434\\u043b\\u044f \\u0441\\u0440\\u0430\\u0432\\u043d\\u0435\\u043d\\u0438\\u044f \\u0435\\u0449\\u0451 \\u043d\\u0435\\u0442)');\nconst message = `${header}\\n\\n${body}${summarySection}`;\nreturn [{ json: { message } }];"
+      },
+      "id": "format-digest",
+      "name": "Format digest",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [520, 0]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_ALERT_CHAT_ID }}",
+        "text": "={{ $json.message }}",
+        "additionalFields": {}
+      },
+      "id": "telegram-send",
+      "name": "Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [740, -80],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-alerts",
+          "name": "Telegram bot (alerts)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $env.ALERT_EMAIL_FROM }}",
+        "toEmail": "={{ $env.ALERT_EMAIL_TO }}",
+        "subject": "Weekly AI Business Digest",
+        "text": "={{ $json.message }}",
+        "options": {}
+      },
+      "id": "email-send",
+      "name": "Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [740, 80],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-alerts",
+          "name": "SMTP (alerts)"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Weekly schedule": {
+      "main": [[{ "node": "Insert snapshot", "type": "main", "index": 0 }]]
+    },
+    "Insert snapshot": {
+      "main": [[{ "node": "Diff snapshots", "type": "main", "index": 0 }]]
+    },
+    "Diff snapshots": {
+      "main": [[{ "node": "Build digest data", "type": "main", "index": 0 }]]
+    },
+    "Build digest data": {
+      "main": [[{ "node": "If has baseline", "type": "main", "index": 0 }]]
+    },
+    "If has baseline": {
+      "main": [
+        [{ "node": "Ollama AI summary", "type": "main", "index": 0 }],
+        [{ "node": "Format digest", "type": "main", "index": 0 }]
+      ]
+    },
+    "Ollama AI summary": {
+      "main": [[{ "node": "Format digest", "type": "main", "index": 0 }]]
+    },
+    "Format digest": {
+      "main": [
+        [
+          { "node": "Telegram", "type": "main", "index": 0 },
+          { "node": "Email", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" }
+}

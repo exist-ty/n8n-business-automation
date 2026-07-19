@@ -1,0 +1,126 @@
+{
+  "id": "a094b035864d4a9e",
+  "name": "Data Drift Monitor",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "triage-drift-check",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-600, 0],
+      "webhookId": "triage-drift-check"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "CREATE TABLE IF NOT EXISTS triage_distribution_snapshots (id SERIAL PRIMARY KEY, captured_at TIMESTAMP NOT NULL DEFAULT now(), metric_name TEXT NOT NULL, metric_key TEXT NOT NULL, metric_value NUMERIC(6, 4) NOT NULL); INSERT INTO triage_distribution_snapshots (metric_name, metric_key, metric_value) SELECT 'category_pct', category, ROUND(COUNT(*)::numeric / SUM(COUNT(*)) OVER (), 4) FROM triage_results GROUP BY category UNION ALL SELECT 'avg_confidence', 'overall', ROUND(AVG(confidence), 4) FROM triage_results UNION ALL SELECT 'high_priority_pct', 'overall', ROUND(COUNT(*) FILTER (WHERE priority = 'high')::numeric / COUNT(*), 4) FROM triage_results;",
+        "options": {}
+      },
+      "id": "insert-snapshot",
+      "name": "Insert snapshot",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-380, 0],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-triage-readonly",
+          "name": "Postgres (triage, n8n_readonly)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH ranked_runs AS (SELECT captured_at, ROW_NUMBER() OVER (ORDER BY captured_at DESC) AS rn FROM (SELECT DISTINCT captured_at FROM triage_distribution_snapshots) d), current_run AS (SELECT s.metric_name, s.metric_key, s.metric_value FROM triage_distribution_snapshots s JOIN ranked_runs r ON r.captured_at = s.captured_at AND r.rn = 1), previous_run AS (SELECT s.metric_name, s.metric_key, s.metric_value FROM triage_distribution_snapshots s JOIN ranked_runs r ON r.captured_at = s.captured_at AND r.rn = 2) SELECT COALESCE(c.metric_name, p.metric_name) AS metric_name, COALESCE(c.metric_key, p.metric_key) AS metric_key, COALESCE(p.metric_value, 0) AS previous_value, COALESCE(c.metric_value, 0) AS current_value, ROUND(COALESCE(c.metric_value, 0) - COALESCE(p.metric_value, 0), 4) AS delta, (SELECT COUNT(DISTINCT captured_at) FROM triage_distribution_snapshots) AS snapshot_count FROM current_run c FULL OUTER JOIN previous_run p ON p.metric_name = c.metric_name AND p.metric_key = c.metric_key ORDER BY ABS(COALESCE(c.metric_value, 0) - COALESCE(p.metric_value, 0)) DESC;",
+        "options": {}
+      },
+      "id": "diff-snapshots",
+      "name": "Diff snapshots",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-160, 0],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-triage-readonly",
+          "name": "Postgres (triage, n8n_readonly)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all().map(i => i.json);\nconst THRESHOLD = 0.05; // 5 п.п. — см. README, честная оговорка про run-over-run вместо day-over-day\n\nif (rows.length === 0 || Number(rows[0].snapshot_count) < 2) {\n  return [{ json: { skip: true, message: 'Data Drift Monitor: первый снепшот, базы для сравнения ещё нет.' } }];\n}\n\nconst drifted = rows.filter(r => Math.abs(Number(r.delta)) >= THRESHOLD);\nif (drifted.length === 0) {\n  return [{ json: { skip: true, message: 'Data Drift Monitor: отклонений выше порога не найдено.' } }];\n}\n\nconst fmtPct = v => `${Math.round(Number(v) * 100)}%`;\nconst lines = drifted.map(r => {\n  const label = r.metric_name === 'category_pct' ? r.metric_key : r.metric_key + ' (' + r.metric_name + ')';\n  const isPctMetric = r.metric_name !== 'avg_confidence';\n  const from = isPctMetric ? fmtPct(r.previous_value) : Number(r.previous_value).toFixed(2);\n  const to = isPctMetric ? fmtPct(r.current_value) : Number(r.current_value).toFixed(2);\n  return `${label}:\\n${from} \\u2192 ${to}`;\n});\nconst message = ['\\u26a0\\ufe0f Data Drift', '', ...lines].join('\\n\\n');\nreturn [{ json: { skip: false, message } }];"
+      },
+      "id": "format-drift",
+      "name": "Format drift report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [60, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.skip }}",
+              "rightValue": false,
+              "operator": { "type": "boolean", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-drifted",
+      "name": "If drift found",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [280, 0]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_ALERT_CHAT_ID }}",
+        "text": "={{ $json.message }}",
+        "additionalFields": {}
+      },
+      "id": "telegram-send",
+      "name": "Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [500, -80],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-alerts",
+          "name": "Telegram bot (alerts)"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Insert snapshot", "type": "main", "index": 0 }]]
+    },
+    "Insert snapshot": {
+      "main": [[{ "node": "Diff snapshots", "type": "main", "index": 0 }]]
+    },
+    "Diff snapshots": {
+      "main": [[{ "node": "Format drift report", "type": "main", "index": 0 }]]
+    },
+    "Format drift report": {
+      "main": [[{ "node": "If drift found", "type": "main", "index": 0 }]]
+    },
+    "If drift found": {
+      "main": [
+        [{ "node": "Telegram", "type": "main", "index": 0 }],
+        []
+      ]
+    }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" }
+}

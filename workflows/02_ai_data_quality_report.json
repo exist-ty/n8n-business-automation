@@ -1,0 +1,78 @@
+{
+  "id": "43a369656ad84483",
+  "name": "AI Data Quality Report",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "etl-quality-report",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-400, 0],
+      "webhookId": "etl-quality-report"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT 'row_count' AS check_name, 'stg_customers' AS entity, COUNT(*)::text AS value, (COUNT(*) > 0) AS ok FROM stg_customers UNION ALL SELECT 'row_count', 'stg_orders', COUNT(*)::text, (COUNT(*) > 0) FROM stg_orders UNION ALL SELECT 'row_count', 'stg_products', COUNT(*)::text, (COUNT(*) > 0) FROM stg_products UNION ALL SELECT 'row_count', 'stg_marketing_spend', COUNT(*)::text, (COUNT(*) > 0) FROM stg_marketing_spend UNION ALL SELECT 'null_check', 'stg_customers.signup_date', COUNT(*)::text, (COUNT(*) = 0) FROM stg_customers WHERE signup_date IS NULL UNION ALL SELECT 'null_check', 'stg_customers.city', COUNT(*)::text, (COUNT(*) = 0) FROM stg_customers WHERE city IS NULL UNION ALL SELECT 'duplicate_check', 'stg_customers.email', COUNT(*)::text, (COUNT(*) = 0) FROM (SELECT email FROM stg_customers GROUP BY email HAVING COUNT(*) > 1) dup UNION ALL SELECT 'orphan_fk_check', 'stg_orders.customer_id', COUNT(*)::text, (COUNT(*) = 0) FROM stg_orders o LEFT JOIN stg_customers c ON c.customer_id = o.customer_id WHERE c.customer_id IS NULL UNION ALL SELECT 'orphan_fk_check', 'stg_orders.product_id', COUNT(*)::text, (COUNT(*) = 0) FROM stg_orders o LEFT JOIN stg_products p ON p.product_id = o.product_id WHERE p.product_id IS NULL UNION ALL SELECT 'value_range_check', 'stg_orders.total_amount<=0', COUNT(*)::text, (COUNT(*) = 0) FROM stg_orders WHERE total_amount <= 0 UNION ALL SELECT 'value_range_check', 'stg_products.price<=0', COUNT(*)::text, (COUNT(*) = 0) FROM stg_products WHERE price <= 0 UNION ALL SELECT 'value_range_check', 'stg_marketing_spend.spend<0', COUNT(*)::text, (COUNT(*) = 0) FROM stg_marketing_spend WHERE spend < 0 ORDER BY check_name, entity",
+        "options": {}
+      },
+      "id": "run-checks",
+      "name": "Run quality checks",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-180, 0],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-etl-readonly",
+          "name": "Postgres (etl_portfolio, n8n_readonly)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all().map(i => i.json);\nconst failed = rows.filter(r => !r.ok);\nconst lines = rows.map(r => `${r.ok ? '\\u2705' : '\\u274c'} ${r.check_name} / ${r.entity}: ${r.value}`);\nconst header = failed.length === 0\n  ? '\\u2705 AI Data Quality Report \\u2014 \\u0432\\u0441\\u0451 \\u0447\\u0438\\u0441\\u0442\\u043e'\n  : `\\u26a0\\ufe0f AI Data Quality Report \\u2014 ${failed.length} \\u043f\\u0440\\u043e\\u0432\\u0430\\u043b\\u0435\\u043d\\u043e(\\u0439) \\u0438\\u0437 \\u0441\\u0442\\u0440\\u043e\\u044f`;\nconst message = [header, '', ...lines].join('\\n');\nreturn [{ json: { ok: failed.length === 0, failed_count: failed.length, message } }];"
+      },
+      "id": "format-report",
+      "name": "Format report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [40, 0]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_ALERT_CHAT_ID }}",
+        "text": "={{ $json.message }}",
+        "additionalFields": {}
+      },
+      "id": "telegram-send",
+      "name": "Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [260, 0],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-alerts",
+          "name": "Telegram bot (alerts)"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Run quality checks", "type": "main", "index": 0 }]]
+    },
+    "Run quality checks": {
+      "main": [[{ "node": "Format report", "type": "main", "index": 0 }]]
+    },
+    "Format report": {
+      "main": [[{ "node": "Telegram", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" }
+}
