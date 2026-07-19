@@ -1,0 +1,33 @@
+name: Tests
+
+on: [push, pull_request]
+
+jobs:
+  validate-workflows:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Check workflow JSON is valid
+        run: |
+          python -c "
+          import json, glob
+          files = sorted(glob.glob('workflows/*.json'))
+          assert files, 'no workflow files found'
+          for f in files:
+              with open(f, encoding='utf-8') as fh:
+                  data = json.load(fh)
+              assert 'nodes' in data and 'connections' in data, f'{f}: missing nodes/connections'
+          print(f'Validated {len(files)} workflow file(s)')
+          "
+
+  validate-compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate docker-compose.yml syntax
+        run: |
+          echo "N8N_ENCRYPTION_KEY=dummy" > .env
+          docker compose config -q
