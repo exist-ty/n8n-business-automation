@@ -1,9 +1,9 @@
 # n8n Business Automation
 
 Слой бизнес-автоматизации поверх остальной экосистемы
-([etl-portfolio](../etl-portfolio), [product-marketing-analytics](../product-marketing-analytics),
-[support-triage-llm](../llm-practice), оркестрируются через
-[Nikolay-Kolesnikov-portfolio-hub](../Nikolay-Kolesnikov-portfolio-hub)/Airflow).
+([etl-portfolio](https://github.com/exist-ty/etl-portfolio), [product-marketing-analytics](https://github.com/exist-ty/product-marketing-analytics),
+[support-triage-llm](https://github.com/exist-ty/support-triage-llm), оркестрируются через
+[Nikolay-Kolesnikov-portfolio-hub](https://github.com/exist-ty/Nikolay-Kolesnikov-Data-Engineering-Applied-ML-LLM-Portfolio-Hub)/Airflow).
 Airflow оркестрирует пайплайны данных; n8n — это то, что происходит
 **вокруг** пайплайнов и обращено к людям: алерты, дайджесты, разговорный
 доступ к аналитике. Разделение осознанное — Airflow и n8n НЕ дублируют
