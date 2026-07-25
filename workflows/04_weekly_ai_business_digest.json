@@ -83,6 +83,27 @@
     },
     {
       "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" },
+          "conditions": [
+            {
+              "leftValue": "={{ $env.DIGEST_LLM_BACKEND }}",
+              "rightValue": "groq",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "backend-switch",
+      "name": "Backend switch",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [190, -80]
+    },
+    {
+      "parameters": {
         "method": "POST",
         "url": "http://host.docker.internal:11434/api/generate",
         "sendBody": true,
@@ -98,7 +119,26 @@
     },
     {
       "parameters": {
-        "jsCode": "const raw_lines = $('Build digest data').item.json.raw_lines;\nconst hasBaseline = $('Build digest data').item.json.has_baseline;\nlet aiSummary = '';\nif (hasBaseline) {\n  const resp = $input.first().json;\n  aiSummary = (resp.response || '').trim();\n}\nconst header = '\\ud83d\\udcc8 Weekly Report';\nconst body = raw_lines.join('\\n');\nconst summarySection = aiSummary ? `\\n\\n\\u26a0\\ufe0f ${aiSummary}` : (hasBaseline ? '' : '\\n\\n(\\u043f\\u0435\\u0440\\u0432\\u044b\\u0439 \\u0437\\u0430\\u043f\\u0443\\u0441\\u043a \\u2014 \\u0431\\u0430\\u0437\\u044b \\u0434\\u043b\\u044f \\u0441\\u0440\\u0430\\u0432\\u043d\\u0435\\u043d\\u0438\\u044f \\u0435\\u0449\\u0451 \\u043d\\u0435\\u0442)');\nconst message = `${header}\\n\\n${body}${summarySection}`;\nreturn [{ json: { message } }];"
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "=Bearer {{ $env.GROQ_API_KEY }}" }]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $env.GROQ_CHAT_MODEL || 'llama-3.3-70b-versatile', messages: [{ role: 'user', content: $json.prompt }], temperature: 0.3, max_tokens: 300 }) }}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "groq-summary",
+      "name": "Llama 3.3 70B summary (Groq)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [300, -280]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw_lines = $('Build digest data').item.json.raw_lines;\nconst hasBaseline = $('Build digest data').item.json.has_baseline;\nlet aiSummary = '';\nif (hasBaseline) {\n  const resp = $input.first().json;\n  // Ollama (/api/generate) -> {response}; Groq (OpenAI-\\u0441\\u043e\\u0432\\u043c\\u0435\\u0441\\u0442\\u0438\\u043c\\u044b\\u0439) -> {choices[0].message.content}\n  aiSummary = (resp.response || resp.choices?.[0]?.message?.content || '').trim();\n}\nconst header = '\\ud83d\\udcc8 Weekly Report';\nconst body = raw_lines.join('\\n');\nconst summarySection = aiSummary ? `\\n\\n\\u26a0\\ufe0f ${aiSummary}` : (hasBaseline ? '' : '\\n\\n(\\u043f\\u0435\\u0440\\u0432\\u044b\\u0439 \\u0437\\u0430\\u043f\\u0443\\u0441\\u043a \\u2014 \\u0431\\u0430\\u0437\\u044b \\u0434\\u043b\\u044f \\u0441\\u0440\\u0430\\u0432\\u043d\\u0435\\u043d\\u0438\\u044f \\u0435\\u0449\\u0451 \\u043d\\u0435\\u0442)');\nconst message = `${header}\\n\\n${body}${summarySection}`;\nreturn [{ json: { message } }];"
       },
       "id": "format-digest",
       "name": "Format digest",
@@ -160,11 +200,20 @@
     },
     "If has baseline": {
       "main": [
-        [{ "node": "Ollama AI summary", "type": "main", "index": 0 }],
+        [{ "node": "Backend switch", "type": "main", "index": 0 }],
         [{ "node": "Format digest", "type": "main", "index": 0 }]
       ]
     },
+    "Backend switch": {
+      "main": [
+        [{ "node": "Llama 3.3 70B summary (Groq)", "type": "main", "index": 0 }],
+        [{ "node": "Ollama AI summary", "type": "main", "index": 0 }]
+      ]
+    },
     "Ollama AI summary": {
+      "main": [[{ "node": "Format digest", "type": "main", "index": 0 }]]
+    },
+    "Llama 3.3 70B summary (Groq)": {
       "main": [[{ "node": "Format digest", "type": "main", "index": 0 }]]
     },
     "Format digest": {

@@ -18,7 +18,11 @@ Airflow оркестрирует пайплайны данных; n8n — это
   репозиториев, но под тремя новыми, специально ограниченными ролями
   (см. "Безопасность" ниже)
 - **Ollama** (qwen2.5:3b-instruct) — та же локальная LLM, что и в
-  support-triage-llm, для AI-сводки дайджеста и NL→SQL в боте
+  support-triage-llm, для AI-сводки дайджеста и NL→SQL в боте (backend по
+  умолчанию)
+- **Groq API** (Llama 3.3 70B Instruct) — опциональный облачный backend для
+  AI-сводки дайджеста (`DIGEST_LLM_BACKEND=groq`, workflow 04) — см.
+  «Локально vs облако» ниже
 - **Telegram Bot API**, **SMTP**, **Notion API** — каналы доставки
 
 ## Почему n8n, а не только Airflow
@@ -92,7 +96,7 @@ docker compose restart n8n  # активация применяется толь
 | 1 | ETL Failure Alert | Airflow `on_failure_callback` → webhook | ✅ реальный Telegram-алерт получен |
 | 2 | AI Data Quality Report | Airflow, после `etl_pipeline` → webhook | ✅ реальный Telegram-алерт получен |
 | 3 | Data Drift Monitor | Airflow, после `evaluate_llm` → webhook | ✅ SQL проверен на реальных данных (см. ниже) |
-| 4 | Weekly AI Business Digest | n8n Cron (понедельник, 8:00) | ✅ SQL + Ollama-сводка проверены на реальных данных |
+| 4 | Weekly AI Business Digest | n8n Cron (понедельник, 8:00) | ✅ SQL + Ollama-сводка проверены на реальных данных; облачный backend (Llama 3.3 70B, Groq) — код готов, живой вызов ещё не проверен (см. «Локально vs облако» ниже) |
 | 5 | Notion Auto Documentation | Airflow, после `refresh_marts` → webhook | ✅ реальная страница в Notion обновлена вживую (см. ниже) |
 | 6 | Self-Service Analytics Bot | Telegram-сообщение боту | ✅ NL→SQL→выполнение проверены реальными вызовами Ollama + Postgres (см. ниже) |
 
@@ -112,6 +116,31 @@ webhook'ом изнутри Airflow, а не наоборот.
 оказался заблокирован файрволом, что подтвердил встроенный precheck
 самого `cloudflared`; `ngrok` (порт 443, отдельная инфраструктура)
 сработал без проблем.
+
+## Локально vs облако: AI-сводка дайджеста
+
+Workflow 04 (Weekly AI Business Digest) по умолчанию суммирует изменения
+бизнес-метрик локальной Qwen2.5-3B-Instruct через Ollama — без единого
+внешнего API-вызова. Добавлен второй вариант: `DIGEST_LLM_BACKEND=groq` в
+`.env` переключает узел `Backend switch` на `Llama 3.3 70B summary (Groq)`
+вместо `Ollama AI summary` — тот же промпт (агрегированные значения
+ROMI/LTV/retention и их изменение к прошлому запуску), тот же дальнейший
+шаг `Format digest`, который теперь понимает оба формата ответа (Ollama
+`{response}` и OpenAI-совместимый `{choices[0].message.content}` у Groq).
+
+**Данные.** Промпт содержит только агрегированные бизнес-метрики
+(ROMI по каналам, средний LTV, retention) — не персональные данные
+конкретных клиентов. При `DIGEST_LLM_BACKEND=groq` этот текст уходит по
+HTTPS на инфраструктуру Groq с ключом из `GROQ_API_KEY` (заголовок
+`Authorization: Bearer ...`, см. узел `groq-summary` в
+`workflows/04_weekly_ai_business_digest.json`) — при локальном Ollama
+ничего не покидает машину. Осознанный выбор, а не побочный эффект смены
+конфига.
+
+**Статус:** узел и переключение реализованы и провалидированы как валидный
+n8n JSON, но живой вызов Groq из-под n8n ещё не проверен (нужны
+`GROQ_API_KEY` и поднятый контейнер n8n) — не выдаю это за протестированное,
+пока не прогоню вживую.
 
 ## Честные результаты тестирования
 
