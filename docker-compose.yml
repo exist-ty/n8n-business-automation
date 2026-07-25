@@ -29,6 +29,12 @@ services:
       ALERT_EMAIL_FROM: ${ALERT_EMAIL_FROM:-}
       ALERT_EMAIL_TO: ${ALERT_EMAIL_TO:-}
       OLLAMA_CHAT_MODEL: qwen2.5:3b-instruct
+      # Weekly AI Business Digest (workflows/04): DIGEST_LLM_BACKEND=groq
+      # переключает узел Backend switch на облачную Llama 3.3 70B (Groq) —
+      # см. README, "Локально vs облако"
+      DIGEST_LLM_BACKEND: ${DIGEST_LLM_BACKEND:-ollama}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_CHAT_MODEL: ${GROQ_CHAT_MODEL:-llama-3.3-70b-versatile}
       NOTION_API_TOKEN: ${NOTION_API_TOKEN:-}
       NOTION_DOCS_PAGE_ID: ${NOTION_DOCS_PAGE_ID:-}
       # Не персистентный: заполняется только на время живого теста Telegram
